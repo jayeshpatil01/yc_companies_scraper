@@ -3,6 +3,7 @@ require 'nokogiri'
 
 class ScraperController < ApplicationController
   BASE_URL = 'https://www.ycombinator.com/companies'
+  MAX_RETRIES = 2
 
   def initialize
     @companies = []
@@ -11,10 +12,29 @@ class ScraperController < ApplicationController
   end
 
   def index
-    begin
-      @driver.navigate.to BASE_URL
-      @wait.until { @driver.find_element(css: '._company_86jzd_338') }
+    load_page
+    collect_companies
 
+    render json: @companies
+  ensure
+    @driver.quit
+  end
+
+  private
+  
+  def driver_setup
+    options = Selenium::WebDriver::Chrome::Options.new
+    options.add_argument('--headless')
+    Selenium::WebDriver.for :chrome, options: options
+  end
+  
+  def load_page
+    @driver.navigate.to BASE_URL
+    @wait.until { @driver.find_element(css: '._company_86jzd_338') }
+  end
+
+  def collect_companies
+    begin
       # Find all company cards
       company_cards = @driver.find_elements(css: '._company_86jzd_338')
 
@@ -36,23 +56,17 @@ class ScraperController < ApplicationController
 
     rescue Selenium::WebDriver::Error::NoSuchElementError => e
       Rails.logger.error("Element not found: #{e.message}")
+      retry_count += 1
+      retry if retry_count < MAX_RETRIES
     rescue Selenium::WebDriver::Error::StaleElementReferenceError => e
       Rails.logger.error("Stale element reference: #{e.message}")
+      retry_count += 1
+      retry if retry_count < MAX_RETRIES
     rescue Selenium::WebDriver::Error::InvalidSessionIdError => e
       Rails.logger.error("Invalid session ID: #{e.message}")
-    ensure
-      @driver.quit
+      retry_count += 1
+      retry if retry_count < MAX_RETRIES
     end
-
-    render json: @companies
-  end
-
-  private
-
-  def driver_setup
-    options = Selenium::WebDriver::Chrome::Options.new
-    options.add_argument('--headless')
-    Selenium::WebDriver.for :chrome, options: options
   end
 
   def extract_company_info(company_card)
